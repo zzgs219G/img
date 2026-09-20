@@ -1,10 +1,8 @@
 /**
  * CNB 图片上传（OpenAPI 方案，不碰 git 仓库）。
  *
- * 历史：旧实现用 isomorphic-git 在内存里 init 空仓库 + force push，
- * 会把远程分支整个覆盖成"只含一张图"的仓库（真实事故）；后改为浅克隆再 push，
- * 但图片是对象存储的事，往 git 仓库里塞图片会让克隆体积随图片数线性膨胀，
- * Worker 内存迟早撑爆。
+ * 历史备注：最早用 isomorphic-git 在 Worker 里 push 到 git 仓库，会让克隆体积
+ * 随图片数线性膨胀，Worker 内存迟早撑爆，故废弃。
  *
  * 现方案走 CNB OpenAPI：
  *   ① POST /{repo}/-/upload/imgs          → 拿预签名 upload_url + form 参数

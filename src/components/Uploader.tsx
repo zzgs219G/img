@@ -18,18 +18,13 @@ interface UploadResult {
   error?: string
 }
 
-type ImgType = 'img' | 'icon'
-
-/** 上传阶段：transfer = 图片传到 Worker，push = 服务端 git push 仓库 */
-type UploadStage = 'transfer' | 'push'
+/** 上传阶段：transfer = 图片传到 Worker，upload = 服务端写入对象存储 */
+type UploadStage = 'transfer' | 'upload'
 
 export function Uploader() {
-  const [type, setType] = useState<ImgType>('img')
   const [file, setFile] = useState<File | null>(null)
   const [originalUrl, setOriginalUrl] = useState<string>('')
   const [originalSize, setOriginalSize] = useState(0)
-  // compressed 只存 blob 和 ext：文件名在上传时按当前 type 现算，
-  // 这样选图后切换"普通图片 / APP 图标"，上传目录会跟着变
   const [compressed, setCompressed] = useState<{ blob: Blob; ext: string } | null>(null)
   const [compressedUrl, setCompressedUrl] = useState<string>('')
   const [error, setError] = useState('')
@@ -38,7 +33,7 @@ export function Uploader() {
   const [stage, setStage] = useState<UploadStage>('transfer')
   const [result, setResult] = useState<UploadResult | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  // 服务端 push 期间“缓慢爬行”进度条的定时器句柄
+  // 服务端写入对象存储期间“缓慢爬行”进度条的定时器句柄
   const crawlRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   /** 停止爬行（幂等） */
@@ -51,7 +46,7 @@ export function Uploader() {
 
   /**
    * 从 from 每秒缓慢爬 1%，封顶到 cap。
-   * 服务端 git push 耗时无法精确测知，用“在动但变慢”如实表达“还在工作”。
+   * 服务端写对象存储耗时无法精确测知，用“在动但变慢”如实表达“还在工作”。
    */
   const crawl = useCallback((from: number, cap: number) => {
     stopCrawl()
@@ -118,29 +113,28 @@ export function Uploader() {
     setError('')
     setResult(null)
     try {
-      // 上传时才生成文件名，确保用的是当前 type（切换后目录跟着变）
-      const name = generateFilename(compressed.ext, type)
+      // 上传时才生成文件名
+      const name = generateFilename(compressed.ext)
       const fd = new FormData()
       fd.append('file', compressed.blob, name)
 
-      // 用 XHR 而不是 fetch：只有 XHR 能拿到“浏览器→Worker”这段的真实字节进度。
-      // 拿到响应后服务端还在做 git push 的收尾已不存在——push 完才返回响应，
-      // 所以 100% 出现即代表 push 已落库。
+      // 用 XHR 而不是 fetch：只有 XHR 能拿到"浏览器→Worker"这段的真实字节进度。
+      // 字节传完 ≠ 完成，服务端还要写入对象存储并返回最终 URL。
       const data = await new Promise<UploadResult>((resolve, reject) => {
         const xhr = new XMLHttpRequest()
         xhr.open('POST', '/api/upload')
         xhr.responseType = 'json'
         // 上传段真实进度：映射到 5% → 80%。图片传完只代表到达 Worker，
-        // 剩下的 80% → 99% 留给服务端 git push，那段无法精确测知。
+        // 剩下的 80% → 99% 留给服务端写入对象存储，那段无法精确测知。
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
-            setStage('push')
+            setStage('upload')
             setProgress(5 + (e.loaded / e.total) * 75)
           }
         }
         xhr.upload.onload = () => {
-          // 字节传完 ≠ 完成，服务端在 push 仓库；进度条转入缓慢爬行
-          setStage('push')
+          // 字节传完 ≠ 完成，服务端在写对象存储；进度条转入缓慢爬行
+          setStage('upload')
           setProgress(80)
           crawl(80, 95)
         }
@@ -181,7 +175,7 @@ export function Uploader() {
       stopCrawl()
       setUploading(false)
     }
-  }, [compressed, type, crawl, stopCrawl])
+  }, [compressed, crawl, stopCrawl])
 
   const reset = useCallback(() => {
     if (originalUrl) URL.revokeObjectURL(originalUrl)
@@ -197,33 +191,14 @@ export function Uploader() {
   }, [originalUrl, compressedUrl])
 
   return (
-    <Card className="w-full max-w-xl">
+    <Card className="w-full max-w-xl shadow-md shadow-primary/5 backdrop-blur-sm">
       <CardHeader>
-        <CardTitle>图片上传</CardTitle>
+        <CardTitle>上传图片</CardTitle>
         <CardDescription>
           拖拽或点击选择图片，浏览器本地压缩后上传（GIF 保持原样）
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <div className="flex gap-2">
-          <Button
-            variant={type === 'img' ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setType('img')}
-            disabled={uploading}
-          >
-            普通图片
-          </Button>
-          <Button
-            variant={type === 'icon' ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setType('icon')}
-            disabled={uploading}
-          >
-            APP 图标
-          </Button>
-        </div>
-
         {!file && (
           <DropZone
             disabled={uploading}
@@ -243,7 +218,7 @@ export function Uploader() {
         />
 
         {error && (
-          <div className="text-destructive bg-destructive/10 rounded-md px-3 py-2 text-sm">
+          <div className="text-destructive bg-destructive/10 border-destructive/20 rounded-md border px-3 py-2 text-sm">
             {error}
           </div>
         )}
@@ -265,7 +240,7 @@ export function Uploader() {
           <div className="flex flex-col gap-1">
             <Progress value={progress} />
             <span className="text-muted-foreground text-xs">
-              {stage === 'transfer' ? '正在传输图片…' : '正在写入仓库，请稍候…'}
+              {stage === 'transfer' ? '正在传输图片…' : '正在写入对象存储，请稍候…'}
             </span>
           </div>
         )}
@@ -275,7 +250,12 @@ export function Uploader() {
         )}
 
         {file && (
-          <Button onClick={handleUpload} disabled={!compressed || uploading} className="flex-1">
+          <Button
+            onClick={handleUpload}
+            disabled={!compressed || uploading}
+            className="w-full"
+            size="lg"
+          >
             {uploading ? '上传中…' : '上传'}
           </Button>
         )}
