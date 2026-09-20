@@ -1,70 +1,97 @@
-import git from 'isomorphic-git'
-import http from 'isomorphic-git/http/web'
-import LightningFS from '@isomorphic-git/lightning-fs'
-import { MemoryBackend } from './memory-backend'
-import { ensureWebLocksShim } from './web-locks-shim'
+/**
+ * CNB 图片上传（OpenAPI 方案，不碰 git 仓库）。
+ *
+ * 历史：旧实现用 isomorphic-git 在内存里 init 空仓库 + force push，
+ * 会把远程分支整个覆盖成"只含一张图"的仓库（真实事故）；后改为浅克隆再 push，
+ * 但图片是对象存储的事，往 git 仓库里塞图片会让克隆体积随图片数线性膨胀，
+ * Worker 内存迟早撑爆。
+ *
+ * 现方案走 CNB OpenAPI：
+ *   ① POST /{repo}/-/upload/imgs          → 拿预签名 upload_url + form 参数
+ *   ② PUT  {upload_url}（multipart/form）  → 流式上传图片二进制
+ *   ③ 返回 assets.path 即图片访问路径，拼成公开 URL
+ *
+ * 全程零 git 操作：不产生 commit、不撑大仓库历史、无需 clone 任何文件。
+ * 参考文档：https://api.cnb.cool/swagger.json（operationId: UploadImgs）
+ */
 
-export interface CnbPushOptions {
+export interface CnbUploadOptions {
+  /** 形如 https://cnb.cool/zzgs219/cdn-img.git */
   repoUrl: string
-  branch: string
+  /** CNB 访问令牌 */
   token: string
-  /** 仓库内路径，如 src/img/img_260920_a3f9c1.webp */
-  filePath: string
+  /** 目标文件名，如 img_260920_a3f9c1.webp */
+  fileName: string
   /** 图片二进制内容 */
   content: Uint8Array
-  /** 提交说明 */
-  message: string
+  /** MIME 类型，如 image/webp */
+  contentType: string
 }
 
-/**
- * 在内存文件系统里完成 init → add → commit → push 到 CNB。
- * 全程内存操作，push 成功即丢弃；失败无脏数据残留。
- */
-export async function pushToCnb(opts: CnbPushOptions): Promise<void> {
-  // Workers 没有 Web Locks API，而 lightning-fs 的 DefaultBackend 在
-  // navigator.locks 缺失时会退回基于 IndexedDB 的 Mutex（同样会炸）。
-  // 必须在 new LightningFS 之前垫上内存版 locks shim。
-  ensureWebLocksShim()
+export interface CnbUploadResult {
+  /** 图片公开访问 URL */
+  url: string
+  /** 服务端存储的文件名 */
+  name: string
+  /** 文件大小（字节） */
+  size: number
+}
 
-  // 每个请求创建一个全新的内存文件系统,请求结束随作用域丢弃,无需 reset。
-  // 用 db 选项注入内存后端,绕开 Workers 中不可用的 IndexedDB。
-  const fs = new LightningFS('mem', {
-    // lightning-fs 的 .d.ts 未导出 FS.Options.db 类型,这里做一次性受控断言
-    db: new MemoryBackend() as never,
-    defer: true,
-  }).promises
-  const dir = '/'
-  const author = { name: 'cdn-img-bot', email: 'bot@cdn-img.local' }
+/** https://cnb.cool/zzgs219/cdn-img.git → https://api.cnb.cool/zzgs219/cdn-img */
+function repoSlug(repoUrl: string): string {
+  const m = /https?:\/\/[^/]+\/(.+?)(?:\.git)?\/?$/.exec(repoUrl)
+  if (!m) throw new Error(`无法从 CNB_REPO 解析仓库路径: ${repoUrl}`)
+  return m[1]
+}
 
-  await git.init({ fs, dir, defaultBranch: opts.branch })
+/** https://cnb.cool/zzgs219/cdn-img.git → https://cnb.cool/zzgs219/cdn-img */
+function repoPage(repoUrl: string): string {
+  return repoUrl.replace(/\.git$/, '')
+}
 
-  const dirPath = '/' + opts.filePath.split('/').slice(0, -1).join('/')
-  if (dirPath !== '/') {
-    // lightning-fs 的 mkdir 不支持 recursive,逐层创建并容忍 EEXIST
-    const parts = dirPath.split('/').filter(Boolean)
-    let cur = ''
-    for (const part of parts) {
-      cur += '/' + part
-      try {
-        await fs.mkdir(cur)
-      } catch (e) {
-        if ((e as { code?: string }).code !== 'EEXIST') throw e
-      }
-    }
-  }
-  await fs.writeFile(`/${opts.filePath}`, opts.content)
+export async function uploadImageToCnb(opts: CnbUploadOptions): Promise<CnbUploadResult> {
+  const slug = repoSlug(opts.repoUrl)
 
-  await git.add({ fs, dir, filepath: opts.filePath })
-  await git.commit({ fs, dir, message: opts.message, author })
-
-  await git.push({
-    fs,
-    http,
-    dir,
-    url: opts.repoUrl,
-    ref: opts.branch,
-    // CNB 走 Basic Auth：username 固定 token，password 为令牌
-    onAuth: () => ({ username: 'token', password: opts.token }),
-    force: true, // 仓库只由本服务写入，避免历史分叉后 push 被拒
+  // ① 申请预签名上传地址
+  const applyResp = await fetch(`https://api.cnb.cool/${slug}/-/upload/imgs`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${opts.token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ name: opts.fileName, size: opts.content.byteLength }),
   })
+  if (!applyResp.ok) {
+    const text = await applyResp.text().catch(() => '')
+    throw new Error(`CNB 申请上传地址失败（HTTP ${applyResp.status}）${text.slice(0, 200)}`)
+  }
+  const apply = (await applyResp.json()) as {
+    upload_url: string
+    form?: Record<string, string>
+    assets: { path: string }
+  }
+
+  // ② 用预签名地址流式上传二进制（PUT，带表单参数）
+  const putResp = await fetch(apply.upload_url, {
+    method: 'PUT',
+    headers: {
+      ...(apply.form ?? {}),
+      'Content-Type': opts.contentType,
+    },
+    body: opts.content as unknown as BodyInit,
+  })
+  if (!putResp.ok) {
+    const text = await putResp.text().catch(() => '')
+    throw new Error(`CNB 上传图片失败（HTTP ${putResp.status}）${text.slice(0, 200)}`)
+  }
+
+  // ③ 拼公开 URL：assets.path 形如 /{slug}/-/imgs/xx/xxxx.png
+  const path = apply.assets?.path
+  if (!path) throw new Error('CNB 返回缺少 assets.path')
+  return {
+    url: `${repoPage(opts.repoUrl)}${path}`,
+    name: opts.fileName,
+    size: opts.content.byteLength,
+  }
 }

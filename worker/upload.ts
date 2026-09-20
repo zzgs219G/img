@@ -1,5 +1,5 @@
 import type { Env } from './env'
-import { pushToCnb } from './cnb'
+import { uploadImageToCnb } from './cnb'
 
 const MAX_SIZE = 10 * 1024 * 1024 // 10MB
 const ALLOWED_EXT = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'avif'])
@@ -9,10 +9,15 @@ function extFromName(name: string): string {
   return m ? m[1].toLowerCase() : ''
 }
 
-/** 目标文件在 CNB 仓库内的路径：src/img/<name>；icons 路径由文件名前缀 icon_ 触发 */
-function repoPathFor(name: string): string {
-  const folder = name.startsWith('icon') ? 'src/icons' : 'src/img'
-  return `${folder}/${name}`
+/** 文件扩展名 → MIME 类型 */
+const MIME: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  avif: 'image/avif',
 }
 
 export async function handleUpload(request: Request, env: Env): Promise<Response> {
@@ -38,26 +43,19 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
       return Response.json({ ok: false, error: '文件过大' }, { status: 400 })
     }
 
-    const branch = env.CNB_BRANCH || 'main'
-    const filePath = repoPathFor(file.name)
-    const content = new Uint8Array(await file.arrayBuffer())
+    const mime = MIME[ext] || 'application/octet-stream'
 
-    await pushToCnb({
+    const r = await uploadImageToCnb({
       repoUrl: env.CNB_REPO,
-      branch,
       token: env.CNB_TOKEN,
-      filePath,
-      content,
-      message: `upload: ${file.name}`,
+      fileName: file.name,
+      content: new Uint8Array(await file.arrayBuffer()),
+      contentType: mime,
     })
-
-    // https://cnb.cool/zzgs219/cdn-img.git → https://cnb.cool/zzgs219/cdn-img
-    const repoPage = env.CNB_REPO.replace(/\.git$/, '')
-    const url = `${repoPage}/-/git/raw/${branch}/${filePath}`
 
     return Response.json({
       ok: true,
-      url,
+      url: r.url,
       name: file.name,
       size: file.size,
     })
