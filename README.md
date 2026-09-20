@@ -1,4 +1,4 @@
-# cdn-img 图床
+# img 图床
 
 Cloudflare Workers 图床：浏览器端 Canvas 压缩 → Worker 内 isomorphic-git push 到 CNB 仓库（[cnb.cool/zzgs219/cdn-img](https://cnb.cool/zzgs219/cdn-img)）。
 
