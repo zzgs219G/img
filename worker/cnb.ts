@@ -1,6 +1,7 @@
 import git from 'isomorphic-git'
 import http from 'isomorphic-git/http/web'
-import { fs as memfs } from 'memfs'
+import LightningFS from '@isomorphic-git/lightning-fs'
+import { MemoryBackend } from './memory-backend'
 
 export interface CnbPushOptions {
   repoUrl: string
@@ -19,17 +20,32 @@ export interface CnbPushOptions {
  * 全程内存操作，push 成功即丢弃；失败无脏数据残留。
  */
 export async function pushToCnb(opts: CnbPushOptions): Promise<void> {
-  const fs = memfs.promises as unknown as import('isomorphic-git').PromiseFsClient &
-    typeof memfs.promises
-  const vol = memfs as unknown as { reset(): void }
-  vol.reset()
+  // 每个请求创建一个全新的内存文件系统,请求结束随作用域丢弃,无需 reset。
+  // 用 db 选项注入内存后端,绕开 Workers 中不可用的 IndexedDB。
+  const fs = new LightningFS('mem', {
+    // lightning-fs 的 .d.ts 未导出 FS.Options.db 类型,这里做一次性受控断言
+    db: new MemoryBackend() as never,
+    defer: true,
+  }).promises
   const dir = '/'
   const author = { name: 'cdn-img-bot', email: 'bot@cdn-img.local' }
 
   await git.init({ fs, dir, defaultBranch: opts.branch })
 
   const dirPath = '/' + opts.filePath.split('/').slice(0, -1).join('/')
-  if (dirPath !== '/') await fs.mkdir(dirPath, { recursive: true })
+  if (dirPath !== '/') {
+    // lightning-fs 的 mkdir 不支持 recursive,逐层创建并容忍 EEXIST
+    const parts = dirPath.split('/').filter(Boolean)
+    let cur = ''
+    for (const part of parts) {
+      cur += '/' + part
+      try {
+        await fs.mkdir(cur)
+      } catch (e) {
+        if ((e as { code?: string }).code !== 'EEXIST') throw e
+      }
+    }
+  }
   await fs.writeFile(`/${opts.filePath}`, opts.content)
 
   await git.add({ fs, dir, filepath: opts.filePath })
