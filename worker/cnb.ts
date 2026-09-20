@@ -2,6 +2,7 @@ import git from 'isomorphic-git'
 import http from 'isomorphic-git/http/web'
 import LightningFS from '@isomorphic-git/lightning-fs'
 import { MemoryBackend } from './memory-backend'
+import { ensureWebLocksShim } from './web-locks-shim'
 
 export interface CnbPushOptions {
   repoUrl: string
@@ -20,6 +21,11 @@ export interface CnbPushOptions {
  * 全程内存操作，push 成功即丢弃；失败无脏数据残留。
  */
 export async function pushToCnb(opts: CnbPushOptions): Promise<void> {
+  // Workers 没有 Web Locks API，而 lightning-fs 的 DefaultBackend 在
+  // navigator.locks 缺失时会退回基于 IndexedDB 的 Mutex（同样会炸）。
+  // 必须在 new LightningFS 之前垫上内存版 locks shim。
+  ensureWebLocksShim()
+
   // 每个请求创建一个全新的内存文件系统,请求结束随作用域丢弃,无需 reset。
   // 用 db 选项注入内存后端,绕开 Workers 中不可用的 IndexedDB。
   const fs = new LightningFS('mem', {
