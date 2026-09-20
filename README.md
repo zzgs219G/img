@@ -1,32 +1,37 @@
-# React + TypeScript + Vite
+# cdn-img 图床
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Cloudflare Workers 图床：浏览器端 Canvas 压缩 → Worker 内 isomorphic-git push 到 CNB 仓库（[cnb.cool/zzgs219/cdn-img](https://cnb.cool/zzgs219/cdn-img)）。
 
-Currently, two official plugins are available:
+一次上传 = 1 次 Worker 请求；页面浏览/压缩/文件名生成全部消耗 0 请求（`run_worker_first: false`，静态资源直接命中）。
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 接口
 
-## React Compiler
+- `GET /api/hello` → `{ "message": "Hello from Worker" }`
+- `POST /api/upload`（multipart，字段 `file`）→ `{ ok, url, name, size }`
+  - url 形如 `https://cnb.cool/zzgs219/cdn-img/-/raw/main/assets/uploads/img_260920_143025_a3f9.webp`
+  - 文件名规则：`img_YYMMDD_HHmmss_xxxx.webp`（GIF 保留原样）
+  - 限制：10MB，格式 jpg/png/webp/gif/bmp/avif，输出统一 webp（GIF 除外）
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 环境变量（Cloudflare Secrets）
 
-## Expanding the Oxlint configuration
+| 名称 | 值 |
+|---|---|
+| `CNB_TOKEN` | CNB 访问令牌（读写仓库权限） |
+| `CNB_REPO` | `https://cnb.cool/zzgs219/cdn-img.git` |
+| `CNB_BRANCH` | `main` |
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## 开发
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev      # 本地开发（/api/* 由 vite 代理外需自建，见下）
+npm run build    # tsc -b && vite build
+npm run lint     # oxlint
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## 部署（Termux 无法本地跑 wrangler，走 GitHub 自动部署）
+
+1. 代码 push 到 GitHub（`origin` = github.com/zzgs219G/img）
+2. Cloudflare Dashboard → Workers & Pages → 连接该 GitHub 仓库
+3. Build command: `npm run build`；Deploy command: `npx wrangler deploy`
+4. 在 Cloudflare 控制台配置上表 3 个 Secret
