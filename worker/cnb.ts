@@ -8,7 +8,7 @@ export interface CnbPushOptions {
   repoUrl: string
   branch: string
   token: string
-  /** 仓库内路径，如 assets/uploads/img_260920_143025_a3f9.webp */
+  /** 仓库内路径，如 src/img/img_260920_a3f9c1.webp */
   filePath: string
   /** 图片二进制内容 */
   content: Uint8Array

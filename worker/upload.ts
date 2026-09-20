@@ -9,9 +9,9 @@ function extFromName(name: string): string {
   return m ? m[1].toLowerCase() : ''
 }
 
-/** 目标文件在 CNB 仓库内的路径：assets/uploads/<name>；icons 路径由文件名前缀 icon_ 触发 */
+/** 目标文件在 CNB 仓库内的路径：src/img/<name>；icons 路径由文件名前缀 icon_ 触发 */
 function repoPathFor(name: string): string {
-  const folder = name.startsWith('icon_') ? 'assets/icons' : 'assets/uploads'
+  const folder = name.startsWith('icon') ? 'src/icons' : 'src/img'
   return `${folder}/${name}`
 }
 
@@ -53,7 +53,7 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
 
     // https://cnb.cool/zzgs219/cdn-img.git → https://cnb.cool/zzgs219/cdn-img
     const repoPage = env.CNB_REPO.replace(/\.git$/, '')
-    const url = `${repoPage}/-/raw/${branch}/${filePath}`
+    const url = `${repoPage}/-/git/raw/${branch}/${filePath}`
 
     return Response.json({
       ok: true,

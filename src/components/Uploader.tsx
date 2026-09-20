@@ -18,39 +18,54 @@ interface UploadResult {
   error?: string
 }
 
+type ImgType = 'img' | 'icon'
+
 export function Uploader() {
+  const [type, setType] = useState<ImgType>('img')
   const [file, setFile] = useState<File | null>(null)
   const [originalUrl, setOriginalUrl] = useState<string>('')
   const [originalSize, setOriginalSize] = useState(0)
-  const [compressed, setCompressed] = useState<{ blob: Blob; name: string } | null>(null)
+  // compressed 只存 blob 和 ext：文件名在上传时按当前 type 现算，
+  // 这样选图后切换"普通图片 / APP 图标"，上传目录会跟着变
+  const [compressed, setCompressed] = useState<{ blob: Blob; ext: string } | null>(null)
+  const [compressedUrl, setCompressedUrl] = useState<string>('')
   const [error, setError] = useState('')
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState(0)
   const [result, setResult] = useState<UploadResult | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const handleSelect = useCallback(async (f: File) => {
-    setError('')
-    setResult(null)
-    setCompressed(null)
-    if (!isAllowedImage(f)) {
-      setError('不支持的格式，允许：jpg / png / webp / gif / bmp / avif')
-      return
-    }
-    if (f.size > MAX_SIZE) {
-      setError(`文件过大（${formatBytes(f.size)}），上限 10MB`)
-      return
-    }
-    setFile(f)
-    setOriginalUrl(URL.createObjectURL(f))
-    setOriginalSize(f.size)
-    try {
-      const r = await compressImage(f)
-      setCompressed({ blob: r.blob, name: generateFilename(r.ext) })
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '压缩失败')
-    }
-  }, [])
+  const handleSelect = useCallback(
+    async (f: File) => {
+      setError('')
+      setResult(null)
+      setCompressed(null)
+      // 上一次压缩产物还没 revoke 就换图，先释放
+      if (compressedUrl) {
+        URL.revokeObjectURL(compressedUrl)
+        setCompressedUrl('')
+      }
+      if (!isAllowedImage(f)) {
+        setError('不支持的格式，允许：jpg / png / webp / gif / bmp / avif')
+        return
+      }
+      if (f.size > MAX_SIZE) {
+        setError(`文件过大（${formatBytes(f.size)}），上限 10MB`)
+        return
+      }
+      setFile(f)
+      setOriginalUrl(URL.createObjectURL(f))
+      setOriginalSize(f.size)
+      try {
+        const r = await compressImage(f)
+        setCompressed({ blob: r.blob, ext: r.ext })
+        setCompressedUrl(URL.createObjectURL(r.blob))
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '压缩失败')
+      }
+    },
+    [compressedUrl]
+  )
 
   const onDrop = useCallback(
     (e: DragEvent) => {
@@ -69,8 +84,10 @@ export function Uploader() {
     setResult(null)
     try {
       setProgress(40)
+      // 上传时才生成文件名，确保用的是当前 type（切换后目录跟着变）
+      const name = generateFilename(compressed.ext, type)
       const fd = new FormData()
-      fd.append('file', compressed.blob, compressed.name)
+      fd.append('file', compressed.blob, name)
       const resp = await fetch('/api/upload', { method: 'POST', body: fd })
       const data = (await resp.json()) as UploadResult
       setProgress(100)
@@ -84,18 +101,20 @@ export function Uploader() {
     } finally {
       setUploading(false)
     }
-  }, [compressed])
+  }, [compressed, type])
 
   const reset = useCallback(() => {
     if (originalUrl) URL.revokeObjectURL(originalUrl)
+    if (compressedUrl) URL.revokeObjectURL(compressedUrl)
     setFile(null)
     setOriginalUrl('')
     setCompressed(null)
+    setCompressedUrl('')
     setResult(null)
     setError('')
     setProgress(0)
     if (inputRef.current) inputRef.current.value = ''
-  }, [originalUrl])
+  }, [originalUrl, compressedUrl])
 
   return (
     <Card className="w-full max-w-xl">
@@ -106,11 +125,32 @@ export function Uploader() {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <DropZone
-          disabled={uploading}
-          onDrop={onDrop}
-          onBrowse={() => inputRef.current?.click()}
-        />
+        <div className="flex gap-2">
+          <Button
+            variant={type === 'img' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setType('img')}
+            disabled={uploading}
+          >
+            普通图片
+          </Button>
+          <Button
+            variant={type === 'icon' ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setType('icon')}
+            disabled={uploading}
+          >
+            APP 图标
+          </Button>
+        </div>
+
+        {!file && (
+          <DropZone
+            disabled={uploading}
+            onDrop={onDrop}
+            onBrowse={() => inputRef.current?.click()}
+          />
+        )}
         <input
           ref={inputRef}
           type="file"
@@ -129,11 +169,16 @@ export function Uploader() {
         )}
 
         {file && (
-          <Preview
-            url={compressed ? URL.createObjectURL(compressed.blob) : originalUrl}
-            originalSize={originalSize}
-            compressedSize={compressed?.blob.size ?? 0}
-          />
+          <>
+            <Preview
+              url={compressedUrl || originalUrl}
+              originalSize={originalSize}
+              compressedSize={compressed?.blob.size ?? 0}
+            />
+            <Button variant="outline" size="sm" onClick={reset} disabled={uploading}>
+              重选图片
+            </Button>
+          </>
         )}
 
         {uploading && <Progress value={progress} />}
@@ -142,14 +187,11 @@ export function Uploader() {
           <ResultCard url={result.url} name={result.name ?? ''} />
         )}
 
-        <div className="flex gap-2">
+        {file && (
           <Button onClick={handleUpload} disabled={!compressed || uploading} className="flex-1">
             {uploading ? '上传中…' : '上传'}
           </Button>
-          <Button variant="outline" onClick={reset} disabled={uploading}>
-            重选
-          </Button>
-        </div>
+        )}
       </CardContent>
     </Card>
   )

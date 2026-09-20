@@ -1,17 +1,16 @@
 /**
- * 生成上传文件名：img_YYMMDD_HHmmss_xxxx.webp
- * - img 固定前缀
- * - YYMMDD 年月日、HHmmss 时分秒（本地时间）
- * - xxxx 4 位随机十六进制（同一秒 65536 种不撞名）
+ * 生成上传文件名：img_YYMMDD_xxxxxx.webp
+ * - 前缀 img / icon（决定落盘目录 src/img 或 src/icons）
+ * - YYMMDD 年月日（本地时间）
+ * - xxxxxx 3 字节随机数的 6 位十六进制（24^6 ≈ 1.9 亿种不撞名）
  * - GIF 保留 .gif，其余固定 .webp
  */
-export function generateFilename(ext: string): string {
+export function generateFilename(ext: string, type: 'img' | 'icon' = 'img'): string {
   const d = new Date()
   const p = (n: number, len = 2) => String(n).padStart(len, '0')
   const yymmdd = `${p(d.getFullYear() % 100)}${p(d.getMonth() + 1)}${p(d.getDate())}`
-  const hhmmss = `${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
-  const rand = Array.from(crypto.getRandomValues(new Uint8Array(2)))
+  const rand = Array.from(crypto.getRandomValues(new Uint8Array(3)))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('')
-  return `img_${yymmdd}_${hhmmss}_${rand}.${ext}`
+  return `${type}_${yymmdd}${rand}.${ext}`
 }

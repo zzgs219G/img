@@ -8,8 +8,8 @@ Cloudflare Workers 图床：浏览器端 Canvas 压缩 → Worker 内 isomorphic
 
 - `GET /api/hello` → `{ "message": "Hello from Worker" }`
 - `POST /api/upload`（multipart，字段 `file`）→ `{ ok, url, name, size }`
-  - url 形如 `https://cnb.cool/zzgs219/cdn-img/-/raw/main/assets/uploads/img_260920_143025_a3f9.webp`
-  - 文件名规则：`img_YYMMDD_HHmmss_xxxx.webp`（GIF 保留原样）
+  - url 形如 `https://cnb.cool/zzgs219/cdn-img/-/git/raw/main/src/img/img_260920_a3f9c1.webp`
+  - 文件名规则：`img_YYMMDD_xxxxxx.webp`（GIF 保留原样；前缀 `icon_` 落 `src/icons/`，其余落 `src/img/`）
   - 限制：10MB，格式 jpg/png/webp/gif/bmp/avif，输出统一 webp（GIF 除外）
 
 ## 环境变量（Cloudflare Secrets）
