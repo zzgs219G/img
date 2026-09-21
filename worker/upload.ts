@@ -56,7 +56,7 @@ export async function handleUpload(request: Request, env: Env): Promise<Response
     return Response.json({
       ok: true,
       url: r.url,
-      name: file.name,
+      name: r.name,
       size: file.size,
     })
   } catch (e) {

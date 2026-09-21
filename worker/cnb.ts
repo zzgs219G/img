@@ -18,7 +18,7 @@ export interface CnbUploadOptions {
   repoUrl: string
   /** CNB 访问令牌 */
   token: string
-  /** 目标文件名，如 img_260920_a3f9c1.webp */
+  /** 前端送来的原始文件名（仅作 multipart 元数据；实际存储名由 CNB 生成） */
   fileName: string
   /** 图片二进制内容 */
   content: Uint8Array
@@ -45,6 +45,13 @@ function repoSlug(repoUrl: string): string {
 /** https://cnb.cool/zzgs219/cdn-img.git → https://cnb.cool/zzgs219/cdn-img */
 function repoPage(repoUrl: string): string {
   return repoUrl.replace(/\.git$/, '')
+}
+
+/** https://cnb.cool/zzgs219/cdn-img.git → https://cnb.cool */
+function repoOrigin(repoUrl: string): string {
+  const m = /^(https?:\/\/[^/]+)/.exec(repoUrl)
+  if (!m) throw new Error(`无法从 CNB_REPO 解析站点地址: ${repoUrl}`)
+  return m[1]
 }
 
 export async function uploadImageToCnb(opts: CnbUploadOptions): Promise<CnbUploadResult> {
@@ -84,12 +91,19 @@ export async function uploadImageToCnb(opts: CnbUploadOptions): Promise<CnbUploa
     throw new Error(`CNB 上传图片失败（HTTP ${putResp.status}）${text.slice(0, 200)}`)
   }
 
-  // ③ 拼公开 URL：assets.path 形如 /{slug}/-/imgs/xx/xxxx.png
+  // ③ 拼公开 URL：assets.path 可能是完整路径 /{slug}/-/imgs/xx/xxxx.webp
+  //    （已含仓库 slug），也可能只是 /-/imgs/... —— 需分别用站点 origin
+  //    或仓库页面地址拼接，避免 slug 重复（见 docs/修复文档.md）。
   const path = apply.assets?.path
   if (!path) throw new Error('CNB 返回缺少 assets.path')
+  const slugPrefix = `/${slug}/`
+  const base = path.startsWith(slugPrefix) ? repoOrigin(opts.repoUrl) : repoPage(opts.repoUrl)
+  // 存储文件名由 CNB 对象存储生成（UUID），从 assets.path 末段提取，
+  // 不再使用前端上传时的原始文件名。
+  const storedName = path.split('/').pop() || opts.fileName
   return {
-    url: `${repoPage(opts.repoUrl)}${path}`,
-    name: opts.fileName,
+    url: `${base}${path}`,
+    name: storedName,
     size: opts.content.byteLength,
   }
 }

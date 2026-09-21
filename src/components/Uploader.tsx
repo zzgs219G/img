@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { compressImage, formatBytes, isAllowedImage, MAX_SIZE } from '@/lib/compress'
-import { generateFilename } from '@/lib/filename'
 import { DropZone } from '@/components/DropZone'
 import { Preview } from '@/components/Preview'
 import { ResultCard } from '@/components/ResultCard'
@@ -106,17 +105,17 @@ export function Uploader() {
   )
 
   const handleUpload = useCallback(async () => {
-    if (!compressed) return
+    if (!compressed || !file) return
     setUploading(true)
     setStage('transfer')
     setProgress(5)
     setError('')
     setResult(null)
     try {
-      // 上传时才生成文件名
-      const name = generateFilename(compressed.ext)
       const fd = new FormData()
-      fd.append('file', compressed.blob, name)
+      // 文件名不再由前端生成：实际存储名由 CNB 对象存储生成（UUID），
+      // 前端送的 multipart 文件名仅是元数据，Worker 不会用它落存储。
+      fd.append('file', compressed.blob, file.name)
 
       // 用 XHR 而不是 fetch：只有 XHR 能拿到"浏览器→Worker"这段的真实字节进度。
       // 字节传完 ≠ 完成，服务端还要写入对象存储并返回最终 URL。
@@ -175,7 +174,7 @@ export function Uploader() {
       stopCrawl()
       setUploading(false)
     }
-  }, [compressed, crawl, stopCrawl])
+  }, [compressed, file, crawl, stopCrawl])
 
   const reset = useCallback(() => {
     if (originalUrl) URL.revokeObjectURL(originalUrl)
